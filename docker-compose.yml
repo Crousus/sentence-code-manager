@@ -1,0 +1,30 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      # Output files — read/write, shared with host
+      - ./data:/app/data
+      # Input sentence files — read-only
+      - /home/control/rlang:/home/control/rlang:ro
+      # GCP Application Default Credentials
+      - /home/control/.config/gcloud:/root/.config/gcloud:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+      - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT}
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        BACKEND_URL: http://backend:8000
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - BACKEND_URL=http://backend:8000
+    depends_on:
+      - backend
