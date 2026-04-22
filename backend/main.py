@@ -71,10 +71,13 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 class Job:
-    def __init__(self, job_id: str, dimension: str, batch: int):
+    def __init__(self, job_id: str, dimension: str, batch: int, mode: str = "singular", max_sentences: int = 0, fix_errors: bool = False):
         self.job_id = job_id
         self.dimension = dimension
         self.batch = batch
+        self.mode = mode
+        self.max_sentences = max_sentences
+        self.fix_errors = fix_errors
         self.status = "running"          # running | completed | error | stopped
         self.started_at = datetime.utcnow().isoformat()
         self.finished_at: str | None = None
@@ -116,6 +119,9 @@ class Job:
             "job_id": self.job_id,
             "dimension": self.dimension,
             "batch": self.batch,
+            "mode": self.mode,
+            "max_sentences": self.max_sentences,
+            "fix_errors": self.fix_errors,
             "status": self.status,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
@@ -140,15 +146,43 @@ async def run_job(job: Job):
     if not os.path.exists(python):
         python = sys.executable
 
-    classifier = os.path.join(os.path.dirname(os.path.abspath(__file__)), "classifier.py")
+    backend_dir = os.path.dirname(os.path.abspath(__file__))
 
-    cmd = [
-        python, classifier,
-        "--dimension", job.dimension,
-        "--batch", str(job.batch),
-        "--project-id", _runtime_config["project_id"],
-        "--location", _runtime_config["location"],
-    ]
+    if job.fix_errors:
+        script = os.path.join(backend_dir, "fix_errors.py")
+        cmd = [
+            python, script,
+            "--dimension", job.dimension,
+            "--mode", job.mode,
+            "--project-id", _runtime_config["project_id"],
+            "--location", _runtime_config["location"],
+        ]
+        if job.mode == "batch":
+            cmd.extend(["--gcs-bucket", _runtime_config["gcs_bucket"]])
+        if job.max_sentences > 0:
+            cmd.extend(["--max-sentences", str(job.max_sentences)])
+    elif job.mode == "batch":
+        script = os.path.join(backend_dir, "batch_classifier.py")
+        cmd = [
+            python, script,
+            "--dimension", job.dimension,
+            "--batch", str(job.batch),
+            "--project-id", _runtime_config["project_id"],
+            "--location", _runtime_config["location"],
+            "--gcs-bucket", _runtime_config["gcs_bucket"],
+            "--max-sentences", str(job.max_sentences),
+        ]
+    else:
+        script = os.path.join(backend_dir, "classifier.py")
+        cmd = [
+            python, script,
+            "--dimension", job.dimension,
+            "--batch", str(job.batch),
+            "--project-id", _runtime_config["project_id"],
+            "--location", _runtime_config["location"],
+        ]
+
+    classifier = script
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -245,6 +279,7 @@ def get_dim_aggregate(dimension: str, batch_stats: list[dict]) -> dict:
 _runtime_config: dict = {
     "project_id": PROJECT_ID,
     "location": LOCATION,
+    "gcs_bucket": os.environ.get("GCS_BUCKET", ""),
 }
 
 
@@ -256,6 +291,7 @@ async def get_config():
 class ConfigUpdate(PydanticModel):
     project_id: str | None = None
     location: str | None = None
+    gcs_bucket: str | None = None
 
 
 @app.patch("/api/config")
@@ -264,6 +300,8 @@ async def update_config(update: ConfigUpdate):
         _runtime_config["project_id"] = update.project_id
     if update.location is not None:
         _runtime_config["location"] = update.location
+    if update.gcs_bucket is not None:
+        _runtime_config["gcs_bucket"] = update.gcs_bucket
     return _runtime_config
 
 
@@ -302,6 +340,38 @@ async def create_dimension(req: DimensionCreate):
     }
     _save_dimensions()
     return {"id": req.id, **_dimensions[req.id]}
+
+
+@app.delete("/api/dimensions/{dim_id}")
+async def delete_dimension(dim_id: str):
+    if dim_id not in _dimensions:
+        raise HTTPException(status_code=404, detail="Dimension not found")
+    cfg = _dimensions[dim_id]
+    # Block deletion if any refinement dimensions reference this one
+    children = [k for k, v in _dimensions.items() if v.get("refine_of") == dim_id]
+    if children:
+        raise HTTPException(status_code=400, detail=f"Cannot delete: refinement dimensions exist ({', '.join(children)}). Delete them first.")
+
+    # Check for running jobs
+    for b in _dim_batches(dim_id):
+        key = f"{dim_id}:{b}"
+        jid = active_job_per_dim_batch.get(key)
+        if jid and jobs.get(jid) and jobs[jid].status == "running":
+            raise HTTPException(status_code=409, detail=f"Cannot delete: job running for batch {b}")
+    fix_key = f"{dim_id}:fix-errors"
+    fix_jid = active_job_per_dim_batch.get(fix_key)
+    if fix_jid and jobs.get(fix_jid) and jobs[fix_jid].status == "running":
+        raise HTTPException(status_code=409, detail="Cannot delete: fix-errors job is running")
+
+    # Clean up associated files
+    for b in _dim_batches(dim_id):
+        for path in [output_path(dim_id, b), refine_input_path(dim_id, b)]:
+            if os.path.exists(path):
+                os.remove(path)
+
+    del _dimensions[dim_id]
+    _save_dimensions()
+    return {"deleted": dim_id}
 
 
 @app.put("/api/dimensions/{dim_id}")
@@ -433,6 +503,11 @@ async def list_dimensions():
         else:
             dim_status = "idle"
 
+        # Check for active fix-errors job
+        fix_key = f"{dim_id}:fix-errors"
+        fix_job_id = active_job_per_dim_batch.get(fix_key)
+        fix_job = jobs.get(fix_job_id) if fix_job_id else None
+
         result.append({
             "id": dim_id,
             "label": cfg["label"],
@@ -443,37 +518,50 @@ async def list_dimensions():
             "code_distribution": agg["code_distribution"],
             "batches": batches_info,
             "refine_of": cfg.get("refine_of"),
+            "fix_errors_job_id": fix_job_id if fix_job and fix_job.status == "running" else None,
         })
     return result
 
 
 class StartJobRequest(PydanticModel):
     dimension: str
-    batch: int
+    batch: int = 0
+    mode: str = "singular"
+    max_sentences: int = 0
+    fix_errors: bool = False
 
 
 @app.post("/api/jobs")
 async def start_job(req: StartJobRequest):
+    if req.mode not in ("singular", "batch"):
+        raise HTTPException(status_code=400, detail=f"Invalid mode: {req.mode}. Must be 'singular' or 'batch'")
+    if req.mode == "batch" and not _runtime_config.get("gcs_bucket"):
+        raise HTTPException(status_code=400, detail="GCS bucket must be configured before using batch mode. Set it in ⚙ Config.")
     if req.dimension not in _dimensions:
         raise HTTPException(status_code=400, detail=f"Unknown dimension: {req.dimension}")
-    dim_batch_list = _dim_batches(req.dimension)
-    if req.batch not in dim_batch_list:
-        raise HTTPException(status_code=400, detail=f"Invalid batch: {req.batch}. Must be one of {dim_batch_list}")
 
-    key = f"{req.dimension}:{req.batch}"
+    if req.fix_errors:
+        key = f"{req.dimension}:fix-errors"
+    else:
+        dim_batch_list = _dim_batches(req.dimension)
+        if req.batch not in dim_batch_list:
+            raise HTTPException(status_code=400, detail=f"Invalid batch: {req.batch}. Must be one of {dim_batch_list}")
+        key = f"{req.dimension}:{req.batch}"
+
     existing_job_id = active_job_per_dim_batch.get(key)
     if existing_job_id:
         existing = jobs.get(existing_job_id)
         if existing and existing.status == "running":
-            raise HTTPException(status_code=409, detail=f"Job already running for '{req.dimension}' batch {req.batch}")
+            detail = f"Fix-errors job already running for '{req.dimension}'" if req.fix_errors else f"Job already running for '{req.dimension}' batch {req.batch}"
+            raise HTTPException(status_code=409, detail=detail)
 
     job_id = str(uuid.uuid4())
-    job = Job(job_id, req.dimension, req.batch)
+    job = Job(job_id, req.dimension, req.batch, mode=req.mode, max_sentences=req.max_sentences, fix_errors=req.fix_errors)
     jobs[job_id] = job
     active_job_per_dim_batch[key] = job_id
 
     asyncio.create_task(run_job(job))
-    return {"job_id": job_id, "status": "running"}
+    return {"job_id": job_id, "status": "running", "mode": req.mode}
 
 
 @app.get("/api/jobs")

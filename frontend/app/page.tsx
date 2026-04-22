@@ -8,6 +8,7 @@ import {
   fetchStats,
   startJob,
   stopJob,
+  deleteDimension,
   type BatchInfo,
   type Dimension,
   type Stats,
@@ -18,6 +19,7 @@ import LogDrawer from "@/components/LogDrawer";
 import ResultsDrawer from "@/components/ResultsDrawer";
 import ConfigPanel from "@/components/ConfigPanel";
 import DimensionFormDrawer, { type FormTarget } from "@/components/DimensionFormDrawer";
+import JobStartDialog from "@/components/JobStartDialog";
 
 function pct(a: number, b: number) {
   if (b === 0) return 0;
@@ -48,6 +50,7 @@ export default function Dashboard() {
   const [resultsTarget, setResultsTarget] = useState<{ dimId: string; label: string } | null>(null);
   const [showConfig, setShowConfig] = useState(false);
   const [formTarget, setFormTarget] = useState<FormTarget | null>(null);
+  const [startDialog, setStartDialog] = useState<{ dim: Dimension; batch: number; fixErrors?: boolean } | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -68,12 +71,22 @@ export default function Dashboard() {
     return () => clearInterval(id);
   }, [refresh]);
 
-  const handleStart = async (dim: Dimension, batch: number) => {
-    const key = `${dim.id}:${batch}`;
+  const handleStart = (dim: Dimension, batch: number) => {
+    setStartDialog({ dim, batch });
+  };
+
+  const handleConfirmStart = async (mode: "singular" | "batch", maxSentences: number) => {
+    if (!startDialog) return;
+    const { dim, batch, fixErrors } = startDialog;
+    setStartDialog(null);
+    const key = fixErrors ? `${dim.id}:fix-errors` : `${dim.id}:${batch}`;
     setActionPending((p) => new Set(p).add(key));
     try {
-      const res = await startJob(dim.id, batch);
-      setLogTarget({ jobId: res.job_id, label: `${dim.label} — Batch ${batch}` });
+      const res = await startJob(dim.id, batch, mode, maxSentences, !!fixErrors);
+      setLogTarget({
+        jobId: res.job_id,
+        label: fixErrors ? `Fix Errors — ${dim.label}` : `${dim.label} — Batch ${batch}`,
+      });
       await refresh();
     } catch (e: unknown) {
       alert(String(e));
@@ -270,6 +283,32 @@ export default function Dashboard() {
                 onEdit={() => setFormTarget({ mode: "edit", dimId: dim.id })}
                 onDuplicate={() => handleDuplicate(dim)}
                 onRefine={() => handleRefine(dim)}
+                onFixErrors={() => setStartDialog({ dim, batch: 0, fixErrors: true })}
+                onStopFixErrors={async () => {
+                  if (!dim.fix_errors_job_id) return;
+                  const key = `${dim.id}:fix-errors`;
+                  setActionPending((p) => new Set(p).add(key));
+                  try {
+                    await stopJob(dim.fix_errors_job_id);
+                    await refresh();
+                  } catch (e: unknown) {
+                    alert(String(e));
+                  } finally {
+                    setActionPending((p) => { const n = new Set(p); n.delete(key); return n; });
+                  }
+                }}
+                onDelete={async () => {
+                  const msg = dim.refine_of
+                    ? `Delete refinement "${dim.label}"? This will remove all associated data.`
+                    : `Delete dimension "${dim.label}"? This will remove all output files and data. This cannot be undone.`;
+                  if (!confirm(msg)) return;
+                  try {
+                    await deleteDimension(dim.id);
+                    await refresh();
+                  } catch (e: unknown) {
+                    alert(String(e));
+                  }
+                }}
               />
             ))}
           </div>
@@ -296,6 +335,16 @@ export default function Dashboard() {
           target={formTarget}
           onClose={() => setFormTarget(null)}
           onSaved={refresh}
+        />
+      )}
+      {startDialog && (
+        <JobStartDialog
+          dimLabel={startDialog.dim.label}
+          batch={startDialog.batch}
+          fixErrors={startDialog.fixErrors}
+          errorCount={startDialog.fixErrors ? (startDialog.dim.code_distribution["ERROR"] ?? 0) : undefined}
+          onConfirm={handleConfirmStart}
+          onCancel={() => setStartDialog(null)}
         />
       )}
     </div>
@@ -331,9 +380,12 @@ interface CardProps {
   onEdit: () => void;
   onDuplicate: () => void;
   onRefine: () => void;
+  onFixErrors: () => void;
+  onStopFixErrors: () => void;
+  onDelete?: () => void;
 }
 
-function DimensionCard({ dim, actionPending, onStart, onStop, onViewLogs, onViewResults, onEdit, onDuplicate, onRefine }: CardProps) {
+function DimensionCard({ dim, actionPending, onStart, onStop, onViewLogs, onViewResults, onEdit, onDuplicate, onRefine, onFixErrors, onStopFixErrors, onDelete }: CardProps) {
   const progress = pct(dim.processed, dim.total);
   const isRunning = dim.status === "running";
   const hasResults = dim.processed > 0;
@@ -386,6 +438,15 @@ function DimensionCard({ dim, actionPending, onStart, onStop, onViewLogs, onView
             >
               ✎
             </button>
+            {onDelete && (
+              <button
+                onClick={onDelete}
+                title={isRefine ? "Delete refinement" : "Delete dimension"}
+                className="text-slate-400 hover:text-red-400 text-base px-1.5 transition-colors"
+              >
+                ✕
+              </button>
+            )}
             <StatusBadge status={dim.status as "idle" | "running" | "completed" | "partial" | "error"} />
           </div>
         </div>
@@ -453,6 +514,31 @@ function DimensionCard({ dim, actionPending, onStart, onStop, onViewLogs, onView
               {actionPending.has(`${dim.id}:${b.batch}`) ? "Stopping…" : `■ Stop B${b.batch}`}
             </button>
           ))}
+        {dim.fix_errors_job_id && (
+          <button
+            disabled={actionPending.has(`${dim.id}:fix-errors`)}
+            onClick={onStopFixErrors}
+            className="px-3 py-1.5 text-xs bg-red-900/40 text-red-300 border border-red-800/60 rounded-lg hover:bg-red-900/60 disabled:opacity-50 transition-colors"
+          >
+            {actionPending.has(`${dim.id}:fix-errors`) ? "Stopping…" : "■ Stop Fix Errors"}
+          </button>
+        )}
+        {dim.fix_errors_job_id && (
+          <button
+            onClick={() => onViewLogs(dim.fix_errors_job_id!)}
+            className="px-3 py-1.5 text-xs bg-slate-800 text-blue-400 border border-slate-700 rounded-lg hover:bg-slate-700 transition-colors"
+          >
+            Fix Errors Logs
+          </button>
+        )}
+        {(dim.code_distribution["ERROR"] ?? 0) > 0 && !dim.fix_errors_job_id && (
+          <button
+            onClick={onFixErrors}
+            className="px-3 py-1.5 text-xs bg-amber-900/40 text-amber-300 border border-amber-800/60 rounded-lg hover:bg-amber-900/60 transition-colors"
+          >
+            Fix {dim.code_distribution["ERROR"]} Errors
+          </button>
+        )}
         {hasResults && (
           <button
             onClick={onViewResults}

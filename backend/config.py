@@ -9,8 +9,8 @@ import os
 RLANG_DIR = "/home/control/rlang"
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 
-# Input batch files (sentences_part_1.json … sentences_part_6.json)
-BATCHES = [1, 2, 3, 4, 5, 6]
+# Input batch files (sentences_part_1.json … sentences_part_7.json)
+BATCHES = [1, 2, 3, 4, 5, 6, 7]
 
 # ── Central Vertex AI configuration ──────────────────────────────────────────
 # Change these to switch the GCP project, model, or region for all dimensions.

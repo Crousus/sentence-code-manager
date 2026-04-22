@@ -19,12 +19,16 @@ export interface Dimension {
   code_distribution: Record<string, number>;
   batches: BatchInfo[];
   refine_of?: string;
+  fix_errors_job_id?: string | null;
 }
 
 export interface Job {
   job_id: string;
   dimension: string;
   batch: number;
+  mode?: "singular" | "batch";
+  max_sentences?: number;
+  fix_errors?: boolean;
   status: "running" | "completed" | "error" | "stopped";
   started_at: string;
   finished_at: string | null;
@@ -55,11 +59,17 @@ export async function fetchStats(): Promise<Stats> {
   return res.json();
 }
 
-export async function startJob(dimension: string, batch: number): Promise<{ job_id: string }> {
+export async function startJob(
+  dimension: string,
+  batch: number,
+  mode: "singular" | "batch" = "singular",
+  max_sentences: number = 0,
+  fix_errors: boolean = false,
+): Promise<{ job_id: string }> {
   const res = await fetch(`${API}/api/jobs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ dimension, batch }),
+    body: JSON.stringify({ dimension, batch, mode, max_sentences, fix_errors }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -105,6 +115,7 @@ export function getStreamUrl(jobId: string): string {
 export interface RuntimeConfig {
   project_id: string;
   location: string;
+  gcs_bucket: string;
 }
 
 export async function fetchConfig(): Promise<RuntimeConfig> {
@@ -174,6 +185,14 @@ export async function createRefineDimension(
     throw new Error(err.detail ?? "Failed to create refinement");
   }
   return res.json();
+}
+
+export async function deleteDimension(dimId: string): Promise<void> {
+  const res = await fetch(`${API}/api/dimensions/${dimId}`, { method: "DELETE" });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? "Failed to delete dimension");
+  }
 }
 
 export async function updateDimension(

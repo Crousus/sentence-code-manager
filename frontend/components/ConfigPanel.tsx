@@ -41,7 +41,8 @@ export default function ConfigPanel({ onClose }: Props) {
 
   const dirty = cfg && draft && (
     draft.project_id !== cfg.project_id ||
-    draft.location !== cfg.location
+    draft.location !== cfg.location ||
+    draft.gcs_bucket !== cfg.gcs_bucket
   );
 
   return (
@@ -89,6 +90,16 @@ export default function ConfigPanel({ onClose }: Props) {
                   <option key={l} value={l}>{l}</option>
                 ))}
               </select>
+            </Field>
+
+            <Field label="GCS Bucket">
+              <input
+                value={draft.gcs_bucket}
+                onChange={(e) => setDraft({ ...draft, gcs_bucket: e.target.value })}
+                placeholder="my-project-batch-staging"
+                className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-blue-500"
+              />
+              <p className="text-xs text-slate-600 mt-1">Required for batch prediction mode. Bucket name only, no gs:// prefix.</p>
             </Field>
 
             <div className="pt-2 flex gap-2">
