@@ -146,7 +146,7 @@ def classify(dimension: str, batch: int, project_id: str = PROJECT_ID, location:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Unified manifesto classifier")
     parser.add_argument("--dimension", help="Dimension to classify (e.g. childcare)")
-    parser.add_argument("--batch", type=int, help="Batch number (1-6)")
+    parser.add_argument("--batch", type=int, help="Batch number (1-10)")
     parser.add_argument("--project-id", default=PROJECT_ID, help="GCP project ID")
     parser.add_argument("--location", default=LOCATION, help="Vertex AI location")
     parser.add_argument("--list", action="store_true", help="List available dimensions and exit")
@@ -161,7 +161,7 @@ def main() -> None:
     if not args.dimension:
         parser.error("--dimension is required (or use --list)")
     if not args.batch:
-        parser.error("--batch is required (1-6)")
+        parser.error("--batch is required (1-8)")
 
     classify(args.dimension, args.batch, args.project_id, args.location)
 

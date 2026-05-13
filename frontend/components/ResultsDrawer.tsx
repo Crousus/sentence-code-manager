@@ -36,18 +36,19 @@ export default function ResultsDrawer({ dimId, dimLabel, onClose }: Props) {
 
   useEffect(() => {
     setLoading(true);
-    fetchResults(dimId, offset, LIMIT)
+    fetchResults(dimId, offset, LIMIT, filter)
       .then((data) => {
         setResults(data.results);
         setTotal(data.total);
       })
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, [dimId, offset]);
+  }, [dimId, offset, filter]);
 
-  const filtered = filter === "all"
-    ? results
-    : results.filter((r) => String(r.Code) === filter);
+  const handleFilterChange = (v: string) => {
+    setFilter(v);
+    setOffset(0);
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex">
@@ -57,7 +58,9 @@ export default function ResultsDrawer({ dimId, dimLabel, onClose }: Props) {
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700">
           <div>
             <h2 className="font-semibold text-slate-100">{dimLabel} — Results</h2>
-            <p className="text-xs text-slate-500">{total} classified sentences</p>
+            <p className="text-xs text-slate-500">
+              {total} {filter === "all" ? "classified" : (CODE_LABEL[filter] ?? filter)} sentences
+            </p>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-100 text-xl leading-none">×</button>
         </div>
@@ -67,7 +70,7 @@ export default function ResultsDrawer({ dimId, dimLabel, onClose }: Props) {
           {["all", "1", "0", "-1", "99", "ERROR"].map((v) => (
             <button
               key={v}
-              onClick={() => setFilter(v)}
+              onClick={() => handleFilterChange(v)}
               className={`px-2 py-1 rounded ${filter === v ? "bg-blue-700 text-white" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}
             >
               {v === "all" ? "All" : CODE_LABEL[v] ?? v}
@@ -78,10 +81,10 @@ export default function ResultsDrawer({ dimId, dimLabel, onClose }: Props) {
         {/* Results list */}
         <div className="flex-1 overflow-y-auto scrollbar-thin divide-y divide-slate-800">
           {loading && <p className="p-4 text-slate-500 text-sm">Loading…</p>}
-          {!loading && filtered.length === 0 && (
+          {!loading && results.length === 0 && (
             <p className="p-4 text-slate-500 text-sm italic">No results.</p>
           )}
-          {filtered.map((r) => {
+          {results.map((r) => {
             const code = String(r.Code);
             const badge = CODE_BADGE[code] ?? "bg-slate-700 text-slate-300 border-slate-600";
             return (

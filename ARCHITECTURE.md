@@ -77,7 +77,7 @@ LOCATION   = "global"                           # Vertex AI location
 
 **Batch helpers**:
 ```python
-BATCHES = [1, 2, 3, 4, 5, 6]          # global default for base dimensions
+BATCHES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]    # global default for base dimensions
 input_path(batch)                       # → /home/control/rlang/sentences_part_{batch}.json
 output_path(dim, batch)                 # → sol_projekt/data/output_{dim}_{batch}.json
 refine_input_path(dim, batch)           # → sol_projekt/data/input_{dim}_{batch}.json
@@ -198,7 +198,7 @@ On SIGTERM (batch mode): exits cleanly without cancelling the remote batch job. 
 | POST | `/api/jobs/{id}/stop` | Terminate job process |
 | GET | `/api/config` | Current runtime GCP config |
 | PATCH | `/api/config` | Update `project_id` / `location` / `gcs_bucket` |
-| GET | `/api/results/{dim}` | Paginated results merged across all batches |
+| GET | `/api/results/{dim}` | Paginated results merged across all batches. Optional `code` query param (`1` / `0` / `-1` / `99` / `ERROR`) filters server-side before pagination, so each code value gets its own fully-paginated list. |
 
 ---
 
@@ -222,7 +222,7 @@ This eliminates CORS entirely — the browser only ever talks to the Next.js ori
 page.tsx
   └─ polls /api/dimensions + /api/stats every 3s
   └─ renders DimensionCards sorted: each base dim followed by its refinements
-       └─ N BatchCells per card (6 for base dims, 1–N for refine dims)
+       └─ N BatchCells per card (9 for base dims, 1–N for refine dims)
             └─ click idle/partial → JobStartDialog (choose singular/batch mode + max sentences) → POST /api/jobs
             └─ click running / "■ Stop B{n}" button → POST /api/jobs/{id}/stop
        └─ ↺ Refine button (base dims only) → fetches config → DimensionFormDrawer (refine mode)
@@ -257,7 +257,7 @@ Each card shows:
 
 ### Input (read-only, from rlang/)
 ```
-/home/control/rlang/sentences_part_{1..6}.json
+/home/control/rlang/sentences_part_{1..10}.json
 ```
 Each file: `[{"ID": int, "QuasiSentence": str}, ...]`
 

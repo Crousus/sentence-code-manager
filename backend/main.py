@@ -668,8 +668,18 @@ async def get_stats():
 
 
 @app.get("/api/results/{dim_id}")
-async def get_results(dim_id: str, limit: int = 50, offset: int = 0):
-    """Return paginated results for a dimension (merged across all batches)."""
+async def get_results(
+    dim_id: str,
+    limit: int = 50,
+    offset: int = 0,
+    code: str | None = None,
+):
+    """Return paginated results for a dimension (merged across all batches).
+
+    Optional `code` filter narrows the result set *before* pagination so each
+    code value gets its own contiguous, fully-paginated list. Accepts the
+    string forms used in output files: "1", "0", "-1", "99", "ERROR".
+    """
     if dim_id not in _dimensions:
         raise HTTPException(status_code=404, detail="Dimension not found")
 
@@ -689,11 +699,16 @@ async def get_results(dim_id: str, limit: int = 50, offset: int = 0):
             pass
 
     all_records = sorted(merged.values(), key=lambda x: x.get("ID", 0))
+
+    if code is not None and code != "" and code != "all":
+        all_records = [r for r in all_records if str(r.get("Code")) == code]
+
     return {
         "dimension": dim_id,
         "total": len(all_records),
         "offset": offset,
         "limit": limit,
+        "code": code,
         "results": all_records[offset: offset + limit],
     }
 

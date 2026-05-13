@@ -95,9 +95,12 @@ export async function fetchJobLogs(
 export async function fetchResults(
   dimId: string,
   offset = 0,
-  limit = 50
+  limit = 50,
+  code?: string,
 ): Promise<{ total: number; results: Array<{ ID: number; QuasiSentence: string; Code: number | string }> }> {
-  const res = await fetch(`${API}/api/results/${dimId}?offset=${offset}&limit=${limit}`);
+  const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+  if (code && code !== "all") params.set("code", code);
+  const res = await fetch(`${API}/api/results/${dimId}?${params.toString()}`);
   if (!res.ok) throw new Error("Failed to fetch results");
   return res.json();
 }
